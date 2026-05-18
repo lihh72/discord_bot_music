@@ -13,3 +13,4 @@ class Config:
     FRAME_RATE = 20  # FPS for lyric video
     VIDEO_WIDTH = 1280
     VIDEO_HEIGHT = 720
+    YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "")

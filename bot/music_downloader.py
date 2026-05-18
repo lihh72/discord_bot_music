@@ -58,9 +58,12 @@ class MusicDownloader:
     async def _download_with_ytdlp(self, query: str) -> SongInfo:
         """Download via yt-dlp. Supports URLs and ytsearch: prefix."""
         import yt_dlp
+        from bot.config import Config
 
-        # Resolve cookies.txt path
-        cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
+        # Resolve cookies file: env var first, fallback to cookies.txt in project root
+        cookies_file = Config.YTDLP_COOKIES_FILE
+        if not cookies_file:
+            cookies_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
 
         ydl_opts = {
             'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
@@ -75,9 +78,12 @@ class MusicDownloader:
             'no_warnings': True,
         }
 
-        # Only use cookies if file exists
-        if os.path.isfile(cookies_path):
-            ydl_opts['cookiefile'] = cookies_path
+        # Add cookies if file exists and log confirmation
+        if cookies_file and os.path.isfile(cookies_file):
+            ydl_opts['cookiefile'] = cookies_file
+            logger.info("🍪 Cookies loaded: %s", cookies_file)
+        else:
+            logger.info("ℹ️ No cookies file found (proceeding without cookies)")
 
         def _do_download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
