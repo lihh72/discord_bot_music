@@ -70,6 +70,7 @@ class MusicDownloader:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
+            'cookiefile': os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt'),
         }
 
         def _do_download():
