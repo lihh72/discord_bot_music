@@ -127,11 +127,10 @@ async def handle_play(message, args):
 
     query = " ".join(args)
 
-    # If already playing, add to queue
+    # If already playing, search+download then decide: queue or play directly
     if streamer.voice_client and (
         streamer.voice_client.is_playing() or streamer.voice_client.is_paused()
     ):
-        # Search and download first, then add to queue
         await message.channel.send(f"🔍 Searching for: **{query}**...")
         try:
             song_info = await _downloader.search_and_download(query)
@@ -142,14 +141,46 @@ async def handle_play(message, args):
             await message.channel.send(f"❌ {e}")
             return
 
-        queue = QueueManager.get_queue(guild.id)
-        if queue.add(song_info):
-            await message.channel.send(
-                f"📋 Added to queue (position {queue.size}): **{song_info.title}** - {song_info.artist}"
-            )
+        # Re-check after download: track might have ended during download (race condition fix)
+        if streamer.voice_client and (
+            streamer.voice_client.is_playing() or streamer.voice_client.is_paused()
+        ):
+            # Still playing → add to queue
+            queue = QueueManager.get_queue(guild.id)
+            if queue.add(song_info):
+                await message.channel.send(
+                    f"📋 Added to queue (position {queue.size}): **{song_info.title}** - {song_info.artist}"
+                )
+            else:
+                await message.channel.send("❌ Queue is full (max 50 songs).")
+            return
         else:
-            await message.channel.send("❌ Queue is full (max 50 songs).")
-        return
+            # Track ended during download → play immediately
+            logger.info("Track ended during download, playing immediately: %s", song_info.title)
+            try:
+                after_cb = _make_after_callback(guild.id, message.channel)
+                await streamer.play(song_info, after_callback=after_cb)
+                await message.channel.send(f"🎵 Now playing: **{song_info.title}** - {song_info.artist}")
+            except Exception as e:
+                logger.error("Failed to play audio: %s", e)
+                await message.channel.send(f"❌ Failed to play: {e}")
+                return
+
+            # Fetch lyrics and start screen share
+            lyrics = None
+            try:
+                lyrics = await _lyric_fetcher.fetch_lyrics(song_info.title, song_info.artist)
+            except Exception as e:
+                logger.warning("Failed to fetch lyrics: %s", e)
+            try:
+                if streamer.voice_client:
+                    video_gen = VideoGenerator()
+                    screen_streamer = ScreenShareStreamer(streamer.voice_client, video_gen)
+                    _screen_streamers[guild.id] = screen_streamer
+                    await screen_streamer.start_stream(lyrics or [], song_info, streamer.get_elapsed_time)
+            except Exception as e:
+                logger.warning("Failed to start screen share: %s", e)
+            return
 
     # --- Full play flow ---
 

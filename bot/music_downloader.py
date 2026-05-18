@@ -95,6 +95,12 @@ class MusicDownloader:
                     if not entries:
                         raise NoResultsError(f"No results for '{query}'.")
                     info = entries[0]
+                # Prepare the final filepath using yt-dlp's template
+                # After postprocessing (FFmpeg extract audio), the file is .mp3
+                final_path = ydl.prepare_filename(info)
+                # Replace extension with mp3 (postprocessor converts to mp3)
+                base, _ = os.path.splitext(final_path)
+                info['_final_filepath'] = base + '.mp3'
                 return info
 
         try:
@@ -109,10 +115,19 @@ class MusicDownloader:
         artist = info.get('artist') or info.get('uploader') or 'Unknown'
         duration = float(info.get('duration', 0) or 0)
 
-        # Find downloaded file
-        filepath = self._find_latest_audio()
-        if not filepath:
-            raise DownloadError("Download completed but file not found.")
+        # Use the exact filepath from yt-dlp, not "find latest"
+        filepath = info.get('_final_filepath', '')
+        if not filepath or not os.path.isfile(filepath):
+            # Fallback: check requested_downloads field
+            for dl in info.get('requested_downloads', []):
+                if os.path.isfile(dl.get('filepath', '')):
+                    filepath = dl['filepath']
+                    break
+        if not filepath or not os.path.isfile(filepath):
+            # Last resort fallback
+            filepath = self._find_latest_audio()
+            if not filepath:
+                raise DownloadError("Download completed but file not found.")
 
         logger.info("yt-dlp OK: '%s' by '%s' -> %s", title, artist, filepath)
         return SongInfo(title=title, artist=artist, filepath=filepath, duration=duration)
