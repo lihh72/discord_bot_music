@@ -1,0 +1,15 @@
+[Unit]
+Description=MpaiBot Discord Music Bot
+After=network.target
+
+[Service]
+Type=simple
+User=mpaibot
+WorkingDirectory=/opt/mpaibot
+ExecStart=/opt/mpaibot/venv/bin/python run.py
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
