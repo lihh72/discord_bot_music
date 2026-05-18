@@ -59,8 +59,11 @@ class MusicDownloader:
         """Download via yt-dlp. Supports URLs and ytsearch: prefix."""
         import yt_dlp
 
+        # Resolve cookies.txt path
+        cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
+
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'outtmpl': os.path.join(self.download_dir, '%(title)s.%(ext)s'),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -70,8 +73,11 @@ class MusicDownloader:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'cookiefile': os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt'),
         }
+
+        # Only use cookies if file exists
+        if os.path.isfile(cookies_path):
+            ydl_opts['cookiefile'] = cookies_path
 
         def _do_download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
