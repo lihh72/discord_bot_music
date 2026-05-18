@@ -64,7 +64,7 @@ class MusicDownloader:
         import yt_dlp
 
         ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+            'format': 'ba/b',  # best audio, or just best if no audio-only available
             'outtmpl': os.path.join(self.download_dir, '%(title)s.%(ext)s'),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -74,9 +74,6 @@ class MusicDownloader:
             'noplaylist': True,
             'quiet': True,
             'no_warnings': True,
-            'extractor_args': {
-                'youtube': {'player_client': ['web']},
-            },
         }
 
         # Use cookies file if available (needed for VPS to bypass YouTube bot detection)
