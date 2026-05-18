@@ -64,7 +64,7 @@ class MusicDownloader:
         import yt_dlp
 
         ydl_opts = {
-            'format': 'bestaudio/best',
+            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
             'outtmpl': os.path.join(self.download_dir, '%(title)s.%(ext)s'),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -75,7 +75,7 @@ class MusicDownloader:
             'quiet': True,
             'no_warnings': True,
             'extractor_args': {
-                'youtube': {'player_client': ['android', 'ios']},
+                'youtube': {'player_client': ['web']},
             },
         }
 
