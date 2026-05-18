@@ -39,22 +39,18 @@ class MusicDownloader:
     async def search_and_download(self, query: str) -> SongInfo:
         """Search and download music.
 
-        For URLs: tries yt-dlp first (with cookies if available), falls back to musicdl.
-        For text: tries yt-dlp YouTube search, falls back to musicdl Chinese sources.
+        For URLs: downloads directly via yt-dlp (fast).
+        For text: searches YouTube via yt-dlp ytsearch, falls back to musicdl.
         """
         if _is_url(query):
-            try:
-                return await self._download_with_ytdlp(query)
-            except (NoResultsError, DownloadError) as e:
-                logger.warning("yt-dlp URL failed: %s, trying musicdl", e)
-                return await self._download_with_musicdl(query)
+            return await self._download_with_ytdlp(query)
         else:
-            # Try yt-dlp YouTube search first (fast if cookies available)
+            # Try yt-dlp YouTube search first (fast)
             try:
                 return await self._download_with_ytdlp(f"ytsearch:{query}")
             except (NoResultsError, DownloadError) as e:
-                logger.warning("yt-dlp search failed: %s, trying musicdl", e)
-            # Fallback to musicdl (no YouTube auth needed)
+                logger.warning("yt-dlp search failed, trying musicdl: %s", e)
+            # Fallback to musicdl (slower but more sources)
             return await self._download_with_musicdl(query)
 
     # --- yt-dlp (fast path for URLs and YouTube search) ---
@@ -64,7 +60,7 @@ class MusicDownloader:
         import yt_dlp
 
         ydl_opts = {
-            'format': 'ba/b',  # best audio, or just best if no audio-only available
+            'format': 'bestaudio/best',
             'outtmpl': os.path.join(self.download_dir, '%(title)s.%(ext)s'),
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
@@ -75,11 +71,6 @@ class MusicDownloader:
             'quiet': True,
             'no_warnings': True,
         }
-
-        # Use cookies file if available (needed for VPS to bypass YouTube bot detection)
-        cookies_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
-        if os.path.isfile(cookies_path):
-            ydl_opts['cookiefile'] = cookies_path
 
         def _do_download():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -123,7 +114,7 @@ class MusicDownloader:
         """Synchronous musicdl search+download (runs in thread)."""
         from musicdl import musicdl
 
-        music_sources = ['YouTubeMusicClient', 'NeteaseMusicClient', 'KuwoMusicClient', 'MiguMusicClient']
+        music_sources = ['NeteaseMusicClient', 'KuwoMusicClient', 'MiguMusicClient']
         init_cfg = {src: {'work_dir': self.download_dir, 'search_size_per_source': 2} for src in music_sources}
 
         try:
