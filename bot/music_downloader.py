@@ -1,8 +1,10 @@
-"""MpaiBot Music Downloader - Hybrid: yt-dlp for URLs, musicdl for text search."""
+"""MpaiBot Music Downloader - Uses spotDL for search and download with cache."""
 import asyncio
 import logging
 import os
-from typing import List, Optional
+import re
+import glob
+from typing import Optional
 
 from bot.audio_streamer import SongInfo
 from bot.config import Config
@@ -20,16 +22,11 @@ class NoResultsError(Exception):
     pass
 
 
-def _is_url(query: str) -> bool:
-    """Check if query is a URL."""
-    return query.startswith("http://") or query.startswith("https://")
-
-
 class MusicDownloader:
-    """Hybrid music downloader.
+    """Downloads music using spotDL with local file cache.
 
-    - YouTube/URL: uses yt-dlp (fast, 5-10 seconds)
-    - Text search: uses yt-dlp ytsearch (fast) with musicdl as fallback
+    - If file already exists in downloads folder, uses it directly (instant).
+    - Otherwise downloads via spotDL (Spotify metadata + YouTube audio).
     """
 
     def __init__(self, download_dir: Optional[str] = None):
@@ -37,160 +34,145 @@ class MusicDownloader:
         os.makedirs(self.download_dir, exist_ok=True)
 
     async def search_and_download(self, query: str) -> SongInfo:
-        """Search and download music.
+        """Search and download a song. Uses cache if file already exists."""
+        return await asyncio.to_thread(self._download_sync, query)
 
-        For URLs: downloads directly via yt-dlp (fast).
-        For text: searches YouTube via yt-dlp ytsearch, falls back to musicdl.
-        """
-        if _is_url(query):
-            return await self._download_with_ytdlp(query)
-        else:
-            # Try yt-dlp YouTube search first (fast)
-            try:
-                return await self._download_with_ytdlp(f"ytsearch:{query}")
-            except (NoResultsError, DownloadError) as e:
-                logger.warning("yt-dlp search failed, trying musicdl: %s", e)
-            # Fallback to musicdl (slower but more sources)
-            return await self._download_with_musicdl(query)
+    def _download_sync(self, query: str) -> SongInfo:
+        """Synchronous spotDL download with cache handling."""
+        import subprocess
 
-    # --- yt-dlp (fast path for URLs and YouTube search) ---
+        # Build spotdl command — use --overwrite skip to leverage cache
+        cmd = [
+            'spotdl', 'download', query,
+            '--output', self.download_dir,
+            '--format', 'mp3',
+            '--bitrate', '192k',
+            '--overwrite', 'skip',
+            '--print-errors',
+        ]
 
-    async def _download_with_ytdlp(self, query: str) -> SongInfo:
-        """Download via yt-dlp. Supports URLs and ytsearch: prefix."""
-        import yt_dlp
-        from bot.config import Config
-
-        # Resolve cookies file: env var first, fallback to cookies.txt in project root
-        cookies_file = Config.YTDLP_COOKIES_FILE
-        if not cookies_file:
-            cookies_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'cookies.txt')
-
-        ydl_opts = {
-            'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
-            'outtmpl': os.path.join(self.download_dir, '%(title)s.%(ext)s'),
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'noplaylist': True,
-            'quiet': True,
-            'no_warnings': True,
-        }
-
-        # Add cookies if file exists and log confirmation
+        # Add cookies if available
+        cookies_file = getattr(Config, 'YTDLP_COOKIES_FILE', '')
         if cookies_file and os.path.isfile(cookies_file):
-            ydl_opts['cookiefile'] = cookies_file
+            cmd.extend(['--cookie-file', cookies_file])
             logger.info("🍪 Cookies loaded: %s", cookies_file)
-        else:
-            logger.info("ℹ️ No cookies file found (proceeding without cookies)")
 
-        def _do_download():
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(query, download=True)
-                if info is None:
-                    raise NoResultsError(f"No results for '{query}'.")
-                if 'entries' in info:
-                    entries = info['entries']
-                    if not entries:
-                        raise NoResultsError(f"No results for '{query}'.")
-                    info = entries[0]
-                # Prepare the final filepath using yt-dlp's template
-                # After postprocessing (FFmpeg extract audio), the file is .mp3
-                final_path = ydl.prepare_filename(info)
-                # Replace extension with mp3 (postprocessor converts to mp3)
-                base, _ = os.path.splitext(final_path)
-                info['_final_filepath'] = base + '.mp3'
-                return info
+        logger.info("Running: %s", ' '.join(cmd))
+
+        # Track files before download
+        existing_files = set(self._list_audio_files())
 
         try:
-            info = await asyncio.to_thread(_do_download)
-        except NoResultsError:
-            raise
-        except Exception as e:
-            logger.error("yt-dlp failed for '%s': %s", query, e)
-            raise DownloadError(f"Download failed: {e}")
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=self.download_dir,
+            )
 
-        title = info.get('title', 'Unknown')
-        artist = info.get('artist') or info.get('uploader') or 'Unknown'
-        duration = float(info.get('duration', 0) or 0)
+            output_lines = []
+            skipped_file = None
 
-        # Use the exact filepath from yt-dlp, not "find latest"
-        filepath = info.get('_final_filepath', '')
-        if not filepath or not os.path.isfile(filepath):
-            # Fallback: check requested_downloads field
-            for dl in info.get('requested_downloads', []):
-                if os.path.isfile(dl.get('filepath', '')):
-                    filepath = dl['filepath']
-                    break
-        if not filepath or not os.path.isfile(filepath):
-            # Last resort fallback
-            filepath = self._find_latest_audio()
-            if not filepath:
-                raise DownloadError("Download completed but file not found.")
+            for line in process.stdout:
+                line = line.rstrip()
+                if not line:
+                    continue
+                output_lines.append(line)
+                logger.info("spotdl: %s", line)
 
-        logger.info("yt-dlp OK: '%s' by '%s' -> %s", title, artist, filepath)
+                # Detect "Skipping X - Y (file already exists)" pattern
+                # This means the file is cached — extract the filename
+                skip_match = re.search(
+                    r'Skipping\s+(.+?)\s+\(file already exists\)', line
+                )
+                if skip_match:
+                    skipped_name = skip_match.group(1).strip()
+                    skipped_file = self._find_cached_file(skipped_name)
+
+            process.wait(timeout=60)
+            returncode = process.returncode
+            full_output = '\n'.join(output_lines)
+
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise DownloadError("Download timed out (60s). Try again.")
+        except FileNotFoundError:
+            raise DownloadError("spotdl not found. Run: pip install spotdl")
+
+        # Determine the filepath
+        filepath = None
+
+        # Case 1: File was skipped (already cached) — use cached file
+        if skipped_file and os.path.isfile(skipped_file):
+            filepath = skipped_file
+            logger.info("📦 Using cached file: %s", filepath)
+
+        # Case 2: New file was downloaded
+        if not filepath:
+            current_files = set(self._list_audio_files())
+            new_files = current_files - existing_files
+            if new_files:
+                filepath = list(new_files)[0]
+                logger.info("⬇️ New download: %s", filepath)
+
+        # Case 3: Neither — check errors
+        if not filepath:
+            if 'No results found' in full_output:
+                raise NoResultsError(f"No songs found for '{query}'.")
+            if returncode != 0:
+                raise DownloadError(f"spotdl error: {full_output[-200:]}")
+            raise DownloadError("No audio file found after download.")
+
+        # Extract metadata from filename (spotdl: "Artist - Title.mp3")
+        filename = os.path.basename(filepath)
+        name_without_ext = os.path.splitext(filename)[0]
+
+        if ' - ' in name_without_ext:
+            artist, title = name_without_ext.split(' - ', 1)
+        else:
+            title = name_without_ext
+            artist = 'Unknown'
+
+        duration = self._get_duration(filepath)
+
+        logger.info("✅ Ready: '%s' by '%s' [%.0fs] -> %s", title, artist, duration, filepath)
         return SongInfo(title=title, artist=artist, filepath=filepath, duration=duration)
 
-    # --- musicdl (fallback for broader search) ---
+    def _find_cached_file(self, name: str) -> Optional[str]:
+        """Find a cached audio file matching the given name."""
+        # spotDL names files as "Artist - Title.mp3"
+        for ext in ('.mp3', '.m4a', '.flac', '.opus', '.ogg'):
+            candidate = os.path.join(self.download_dir, f"{name}{ext}")
+            if os.path.isfile(candidate):
+                return candidate
+        # Fuzzy match: search for files containing the name
+        for f in os.listdir(self.download_dir):
+            if name.lower() in f.lower() and self._is_audio(f):
+                return os.path.join(self.download_dir, f)
+        return None
 
-    async def _download_with_musicdl(self, query: str) -> SongInfo:
-        """Search and download via musicdl library."""
-        return await asyncio.to_thread(self._musicdl_sync, query)
-
-    def _musicdl_sync(self, query: str) -> SongInfo:
-        """Synchronous musicdl search+download (runs in thread)."""
-        from musicdl import musicdl
-
-        music_sources = ['NeteaseMusicClient', 'KuwoMusicClient', 'MiguMusicClient']
-        init_cfg = {src: {'work_dir': self.download_dir, 'search_size_per_source': 2} for src in music_sources}
-
-        try:
-            client = musicdl.MusicClient(
-                music_sources=music_sources,
-                init_music_clients_cfg=init_cfg,
-            )
-            search_results = client.search(keyword=query)
-
-            # Flatten results
-            all_songs = []
-            if isinstance(search_results, dict):
-                for songs in search_results.values():
-                    if songs:
-                        all_songs.extend(songs)
-
-            if not all_songs:
-                raise NoResultsError(f"No songs found for '{query}'.")
-
-            best = all_songs[0]
-            client.download(song_infos=[best])
-
-            filepath = self._find_latest_audio()
-            if not filepath:
-                raise DownloadError("musicdl download completed but file not found.")
-
-            title = getattr(best, 'song_name', None) or getattr(best, 'songname', 'Unknown')
-            artist = getattr(best, 'singers', None) or getattr(best, 'singer', 'Unknown')
-            duration_s = getattr(best, 'duration_s', 0) or 0
-
-            return SongInfo(title=str(title), artist=str(artist), filepath=filepath, duration=float(duration_s))
-
-        except (NoResultsError, DownloadError):
-            raise
-        except Exception as e:
-            logger.error("musicdl failed for '%s': %s", query, e)
-            raise DownloadError(f"musicdl failed: {e}")
-
-    # --- Helpers ---
-
-    def _find_latest_audio(self) -> Optional[str]:
-        """Find most recently modified audio file in download dir."""
+    def _list_audio_files(self) -> list:
+        """List all audio files in download directory."""
         if not os.path.isdir(self.download_dir):
-            return None
-        exts = ('.mp3', '.m4a', '.flac', '.opus', '.ogg', '.wav', '.aac')
-        files = [
+            return []
+        return [
             os.path.join(self.download_dir, f)
             for f in os.listdir(self.download_dir)
-            if os.path.isfile(os.path.join(self.download_dir, f)) and f.lower().endswith(exts)
+            if self._is_audio(f)
         ]
-        return max(files, key=os.path.getmtime) if files else None
+
+    def _is_audio(self, filename: str) -> bool:
+        """Check if filename has an audio extension."""
+        return filename.lower().endswith(('.mp3', '.m4a', '.flac', '.opus', '.ogg', '.wav'))
+
+    def _get_duration(self, filepath: str) -> float:
+        """Get audio duration in seconds using mutagen."""
+        try:
+            from mutagen import File as MutagenFile
+            audio = MutagenFile(filepath)
+            if audio and audio.info:
+                return float(audio.info.length)
+        except Exception:
+            pass
+        return 0.0

@@ -1,6 +1,5 @@
 discord.py[voice]>=2.3.0
-yt-dlp>=2024.1.0
-musicdl @ git+https://github.com/CharlesPikachu/musicdl.git@master
+spotdl>=4.2.0
 aiohttp>=3.9.0
 Pillow>=10.0.0
 python-dotenv>=1.0.0
