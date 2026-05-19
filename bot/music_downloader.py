@@ -42,13 +42,16 @@ class MusicDownloader:
         import subprocess
 
         # Build spotdl command — use --overwrite skip to leverage cache
+        # Use slider-kz as primary audio (doesn't block datacenter IPs)
+        # Fallback to soundcloud, then youtube-music
         cmd = [
             'spotdl', 'download', query,
             '--output', self.download_dir,
             '--format', 'mp3',
             '--bitrate', '192k',
             '--overwrite', 'skip',
-            '--audio', 'soundcloud', 'bandcamp', 'piped', 'youtube-music',
+            '--audio', 'slider-kz', 'soundcloud', 'youtube-music',
+            '--dont-filter-results',
             '--print-errors',
         ]
 
