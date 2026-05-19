@@ -48,6 +48,7 @@ class MusicDownloader:
             '--format', 'mp3',
             '--bitrate', '192k',
             '--overwrite', 'skip',
+            '--audio-providers', 'piped,soundcloud,youtube-music',
             '--print-errors',
         ]
 
@@ -56,6 +57,12 @@ class MusicDownloader:
         if cookies_file and os.path.isfile(cookies_file):
             cmd.extend(['--cookie-file', cookies_file])
             logger.info("🍪 Cookies loaded: %s", cookies_file)
+
+        # Add proxy if configured (for VPS/datacenter IPs blocked by YouTube)
+        proxy = getattr(Config, 'SPOTDL_PROXY', '')
+        if proxy:
+            cmd.extend(['--proxy', proxy])
+            logger.info("🌐 Proxy configured: %s", proxy.split('@')[-1] if '@' in proxy else proxy)
 
         logger.info("Running: %s", ' '.join(cmd))
 

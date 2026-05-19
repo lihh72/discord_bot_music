@@ -14,3 +14,4 @@ class Config:
     VIDEO_WIDTH = 1280
     VIDEO_HEIGHT = 720
     YTDLP_COOKIES_FILE = os.getenv("YTDLP_COOKIES_FILE", "")
+    SPOTDL_PROXY = os.getenv("SPOTDL_PROXY", "")
