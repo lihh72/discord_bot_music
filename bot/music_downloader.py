@@ -48,7 +48,7 @@ class MusicDownloader:
             '--format', 'mp3',
             '--bitrate', '192k',
             '--overwrite', 'skip',
-            '--audio', 'piped', 'soundcloud', 'youtube-music',
+            '--audio', 'soundcloud', 'bandcamp', 'piped', 'youtube-music',
             '--print-errors',
         ]
 
